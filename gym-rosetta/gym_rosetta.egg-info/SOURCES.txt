@@ -1,0 +1,6 @@
+setup.py
+gym_rosetta.egg-info/PKG-INFO
+gym_rosetta.egg-info/SOURCES.txt
+gym_rosetta.egg-info/dependency_links.txt
+gym_rosetta.egg-info/requires.txt
+gym_rosetta.egg-info/top_level.txt
