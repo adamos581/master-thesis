@@ -42,7 +42,10 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
             "backbone": spaces.Box(low=-180, high=180, shape=(MAX_LENGTH, 3)),
             "amino_acids": spaces.Box(low=0, high=1, shape=(MAX_LENGTH, len(RESIDUE_LETTERS)))
         })
-        self.action_space = spaces.Box(low=-180, high=180, shape=(MAX_LENGTH, 3))
+        self.action_space = spaces.Dict({
+            "angles": spaces.Box(low=-1, high=1, shape=(MAX_LENGTH, 3)),
+            "residue": spaces.Discrete(MAX_LENGTH)
+        })
         self.encoded_residue_sequence = None
         self.scorefxn = get_fa_scorefxn()
         # self.viewer = None
@@ -81,14 +84,14 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
     def _move(self, action):
         if action is not None:
             self.move_counter += 1
-            for i in range(self.protein_pose.total_residue()):
-                residue_number = i + 1
-                move_pose = action[i]
+            residue_number = action["residue"]
+            if residue_number < self.protein_pose.total_residue():
+                residue_number += 1
+                move_pose = action["angles"]
 
                 phi_angle_value = move_pose[0] * 180.0
                 omega_angle_value = move_pose[1] * 180.0
                 psi_angle_value = move_pose[2] * 180.0
-
                 self.protein_pose.set_phi(residue_number, phi_angle_value)
                 self.protein_pose.set_omega(residue_number, omega_angle_value)
                 self.protein_pose.set_psi(residue_number, psi_angle_value)

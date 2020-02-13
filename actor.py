@@ -4,7 +4,7 @@ import keras.backend as K
 
 from keras.initializers import RandomUniform
 from keras.models import Model
-from keras.layers import Input, Dense, SpatialDropout1D, add, concatenate, Lambda
+from keras.layers import Input, Dense, SpatialDropout1D, add, concatenate, Softmax
 from keras.layers import LSTM, Bidirectional, GlobalMaxPooling1D, GlobalAveragePooling1D,RepeatVector
 from keras.optimizers import Adam
 
@@ -32,7 +32,9 @@ class Actor:
         self.env_backbone_dim = inp_dim["backbone"]
         self.env_amino_acid_dim = inp_dim["amino_acids"]
         self.env_energy_dim = inp_dim["energy"]
-        self.act_dim = out_dim
+        self.act_residue_dim = out_dim["residue"]
+        self.act_angle_dim = out_dim["angle"]
+
         self.act_range = act_range
         self.lr = lr
         self.noise = noise
@@ -59,13 +61,15 @@ class Actor:
 
         # rnn = Dense(128, activation='relu')(rrn)
         # x = concatenate([rnn, auxiliary_input])
-        # x = Dense(128, activation='relu')(x)
+        x = Dense(128, activation='relu')(rrn)
+        residue_selected = Softmax(self.act_residue_dim)(x)
+        angle_mover = Dense(1, activation='tanh')(x)
+
         # x = GaussianNoise(1.0)(x)
-        decoded = RepeatVector(self.act_dim[0])(rrn)
-        decoded = LSTM(self.act_dim[1], activation='tanh', return_sequences=True)(decoded)
+
         # out = Lambda(lambda i: i * 180)(decoded)
 
-        model = Model([inp, inp_acid, auxiliary_input, advantage, old_prediction], decoded)
+        model = Model([inp, inp_acid, auxiliary_input, advantage, old_prediction], [residue_selected, angle_mover])
 
         model.compile(optimizer=Adam(lr=self.lr),
                       loss=[proximal_policy_optimization_loss_continuous(
@@ -79,14 +83,6 @@ class Actor:
         """
         return self.model.predict(state)
 
-
-    def transfer_weights(self):
-        """ Transfer model weights to target model with a factor of Tau
-        """
-        W, target_W = self.model.get_weights(), self.target_model.get_weights()
-        for i in range(len(W)):
-            target_W[i] = self.tau * W[i] + (1 - self.tau)* target_W[i]
-        self.target_model.set_weights(target_W)
 
     def train(self, input, out, batch_size=32, shuffle=True, epochs=10, verbose=False,  callbacks=None):
         """ Actor Training
