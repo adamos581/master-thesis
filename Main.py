@@ -28,14 +28,14 @@ GAMMA = 0.99
 
 BUFFER_SIZE = 64
 BATCH_SIZE = 32
-NUM_ACTIONS = 4
+NUM_ACTIONS = 128
 NUM_STATE = 8
 HIDDEN_SIZE = 128
 NUM_LAYERS = 2
 ENTROPY_LOSS = 5e-3
 LR = 1e-4  # Lower lr stabilises training greatly
 
-DUMMY_ACTION, DUMMY_VALUE = np.zeros((128, 3)), np.zeros((1, 1))
+DUMMY_RESIDUE_ACTION, DUMMY_ANGLE_ACTION, DUMMY_VALUE = np.zeros((128,)),  np.zeros((3,)), np.zeros((1, 1))
 
 
 @nb.jit
@@ -50,10 +50,8 @@ class Agent:
         print(self.env.action_space, 'action_space', self.env.observation_space, 'observation_space')
         env_dim = self.get_state_size()
         action_space = self.env.action_space
-        action_dim = action_space.shape
-        act_range = action_space.high
-        self.actor = Actor(env_dim, action_dim, act_range, LR, NOISE, LOSS_CLIPPING)
-        self.critic = Critic(env_dim, action_dim, LR)
+        self.actor = Actor(env_dim, action_space, LR, NOISE, LOSS_CLIPPING)
+        self.critic = Critic(env_dim, action_space, LR)
 
         self.episode = 0
         obs, reward, done, a = self.env.reset()
@@ -93,7 +91,7 @@ class Agent:
         self.reward = []
 
     def get_action(self):
-        p = self.actor.predict([self.observation.reshape(1, NUM_STATE), DUMMY_VALUE, DUMMY_ACTION])
+        p = self.actor.predict([self.observation.reshape(1, NUM_STATE), DUMMY_VALUE, DUMMY_RESIDUE_ACTION, DUMMY_ANGLE_ACTION])
         if self.val is False:
 
             action = np.random.choice(NUM_ACTIONS, p=np.nan_to_num(p[0]))
@@ -106,12 +104,19 @@ class Agent:
     def get_action_continuous(self):
 
         a, b, c = self.observation
-        p = self.actor.predict([[a], [b], [c], DUMMY_VALUE, [DUMMY_ACTION]])
+        p = self.actor.predict([[a], [b], [c], DUMMY_VALUE, [DUMMY_RESIDUE_ACTION], [DUMMY_ANGLE_ACTION]])
         if self.val is False:
-            action = action_matrix = p[0] + np.random.normal(loc=0, scale=NOISE, size=p[0].shape)
+            angle_action = p[1][0] + np.random.normal(loc=0, scale=NOISE, size=p[1][0].shape)
+            residue_action = np.random.choice(NUM_ACTIONS, p=np.nan_to_num(p[0][0]))
         else:
-            action = action_matrix = p[0]
-        return action, action_matrix, p
+            angle_action = p[1][0]
+            residue_action = np.argmax(p[0][0])
+        print(residue_action)
+
+        zeros = np.zeros(NUM_ACTIONS)
+        zeros[residue_action] = 1
+        action_matrix = [zeros, angle_action]
+        return {"residue": residue_action, "angles": angle_action}, action_matrix, [p[0][0], p[1][0]]
 
     def transform_reward(self):
         if self.val is True:
@@ -120,6 +125,14 @@ class Agent:
             self.writer.add_scalar('Episode reward', np.array(self.reward).sum(), self.episode)
         for j in range(len(self.reward) - 2, -1, -1):
             self.reward[j] += self.reward[j + 1] * GAMMA
+
+    def transform_output(self, batched_output):
+        angle = []
+        residue = []
+        for y in batched_output:
+            angle.append(y[1])
+            residue.append(y[0])
+        return residue, angle
 
     def get_batch(self):
         batch = [[], [], []]
@@ -132,7 +145,6 @@ class Agent:
             action, action_matrix, predicted_action = self.get_action_continuous()
             obs_local, reward, done, info = self.env.step(action)
             observation = [obs_local[key] for key in obs_local.keys()]
-
             print(reward)
             self.reward.append(reward)
             for i, ob in enumerate(self.observation):
@@ -156,9 +168,8 @@ class Agent:
                 tmp_batch = [[], []]
                 temp_input_batch = [[] for _ in range(3)]
                 self.reset_env()
-
         action, pred, reward = np.array(batch[0]), np.array(batch[1]), np.reshape(np.array(batch[2]), (len(batch[2]), 1))
-        pred = np.reshape(pred, (pred.shape[0], pred.shape[2], pred.shape[3]))
+
         obs = input_batch
         return obs, action, pred, reward
 
@@ -172,13 +183,15 @@ class Agent:
             for i in range(len(obs)):
                 obs[i] = obs[i][:BUFFER_SIZE]
             old_prediction = pred
+            residue_action, angle_action = self.transform_output(action)
+            pred_residue_action, pred_angle_action = self.transform_output(pred)
 
             pred_values = self.critic.predict(obs)
 
             advantage = reward - pred_values
 
-
-            actor_loss = self.actor.train([*obs, advantage, old_prediction], action, batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
+            actor_loss = self.actor.train([*obs, advantage, pred_residue_action, pred_angle_action], [residue_action, angle_action],
+                                          batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
             critic_loss = self.critic.train([*obs], [reward], batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
             self.writer.add_scalar('Actor loss', actor_loss.history['loss'][-1], self.gradient_steps)
             self.writer.add_scalar('Critic loss', critic_loss.history['loss'][-1], self.gradient_steps)
