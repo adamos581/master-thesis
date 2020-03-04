@@ -1,3 +1,4 @@
+import json
 import os, subprocess, time, signal
 import gym
 from gym import error, spaces
@@ -10,7 +11,10 @@ from pyrosetta.rosetta.core.id import AtomID
 from enum import Enum
 from pyrosetta.rosetta.core.scoring import CA_rmsd
 import numpy as np
+
+
 init()
+from pyrosetta.toolbox import cleanATOM
 
 import logging
 logger = logging.getLogger(__name__)
@@ -23,7 +27,7 @@ RESIDUE_LETTERS = [
     'A', 'V', 'I', 'L', 'M', 'F', 'Y', 'W', 'empty'
 ]
 
-MAX_LENGTH = 128
+MAX_LENGTH = 64
 
 class ProteinFoldEnv(gym.Env, utils.EzPickle):
 
@@ -36,6 +40,7 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         self.is_finished = False
         self.move_counter = 0
         self.max_move_amount = max_move_amount
+        self.name = None
         self.observation_space = spaces.Dict({
             "energy": spaces.Box(low=np.array([-np.inf]), high=np.array([np.inf]), dtype=np.float32),
             "backbone": spaces.Box(low=-180, high=180, shape=(MAX_LENGTH, 3)),
@@ -48,7 +53,8 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         self.encoded_residue_sequence = None
         self.scorefxn = get_fa_scorefxn()
         self.best_distance = np.inf
-
+        self.validation = False
+        self.best_conformations_dict = {}
         # self.viewer = None
         # self.server_process = None
         # self.server_port = None
@@ -67,6 +73,9 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         #                                   spaces.Box(low=-180, high=180, shape=1)))
         # self.status = hfo_py.IN_GAME
 
+    def save_best_matches(self):
+        with open('data.json', 'w') as fp:
+            json.dump(self.best_conformations_dict, fp)
 
     def _configure_environment(self):
         """
@@ -114,6 +123,12 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
             encoded_residues.append(temp)
         return encoded_residues
 
+    def write_best_conformation(self, distance):
+        if self.name not in self.best_conformations_dict.keys():
+            self.best_conformations_dict[self.name] = [distance]
+        else:
+            self.best_conformations_dict[self.name].append(distance)
+
     def step(self, action):
         penalty = self._move(action)
         ob = self._get_state()
@@ -127,23 +142,37 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
             reward += 1
             self.best_distance = distance
             print("best distance: {} ".format(distance))
+
         self.prev_ca_rmsd = distance
-        if self.move_counter > 32:
+        if self.move_counter >= 128:
             done = True
 
         return [ob, reward, done, {}]
 
     def reset(self):
-        self.target_protein_pose = pose_from_pdb("2y29.pdb")
+        if self.validation:
+            self.name = np.random.choice(os.listdir('protein_data/short_valid'))
+            dir = 'protein_data/short_valid'
+        else:
+            self.name = np.random.choice(os.listdir('protein_data/short'))
+            dir = 'protein_data/short'
+
+        print('chosen protein: ' + self.name)
+        self.target_protein_pose = pose_from_pdb(os.path.join(dir, self.name))
         self.protein_pose = pose_from_sequence(self.target_protein_pose.sequence())
         self.move_counter = 0
         self.reward = 0.0
         self.prev_ca_rmsd = None
+        self.write_best_conformation(self.best_distance)
         self.best_distance = self._get_ca_metric(self.protein_pose, self.target_protein_pose)
 
         self.encoded_residue_sequence = self._encode_residues(self.target_protein_pose.sequence())
-
+        self.save_best_matches()
         return self.step(None)
+
+    def difference_energy(self):
+        target_score = self.scorefxn(self.target_protein_pose)
+        return (self.scorefxn(self.protein_pose) - target_score ) / target_score
 
     def _get_state(self):
         psis = np.divide([self.protein_pose.psi(i + 1) for i in range(self.protein_pose.total_residue())], 180.0)
@@ -155,17 +184,16 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         phis = np.concatenate((phis, np.zeros(rest_zeros)))
 
         backbone_geometry = [list(a) for a in zip(psis, omegas, phis)]
+        a = self.difference_energy()
         return {
             "backbone": backbone_geometry,
             "amino_acids": self.encoded_residue_sequence,
-            "energy": self.scorefxn(self.protein_pose)
+            "energy": self.difference_energy()
         }
+
+    def set_validation_mode(self, is_valid):
+        self.validation = is_valid
 
 
 NUM_ACTIONS = 3
 END_GAME, ROTATE,TURN, = list(range(NUM_ACTIONS))
-
-class ActionLookup(Enum):
-    END_GAME = "EndGame"
-    ROTATE = "Rotate"
-

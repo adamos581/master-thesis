@@ -66,21 +66,23 @@ class Actor:
         old_angle_prediction = Input(shape=self.act_angle_dim)
         old_residue_prediction = Input(shape=(self.act_residue_dim,))
 
-        rrn = Bidirectional(LSTM(64, return_sequences=True))(inp)
-        rrn_acid = Bidirectional(LSTM(64, return_sequences=True))(inp_acid)
+        rrn = Bidirectional(LSTM(64, return_sequences=False))(inp)
+        rrn_acid = Bidirectional(LSTM(64, return_sequences=False))(inp_acid)
         hidden = concatenate([rrn, rrn_acid], axis=1)
 
-        rrn = Bidirectional(LSTM(32, return_sequences=False))(hidden)
+        # rrn = Bidirectional(LSTM(32, return_sequences=False))(hidden)
 
         # rnn = Dense(128, activation='relu')(rrn)
-        # x = concatenate([rnn, auxiliary_input])
-        x = Dense(128, activation='relu')(rrn)
+        x = Dense(128, activation='relu')(hidden)
+        x = concatenate([x, auxiliary_input])
+        x = Dense(64, activation='relu')(x)
+
         residue_selected = Dense(self.act_residue_dim, activation='softmax')(x)
         angle_mover = Dense(3, activation='tanh')(x)
 
+
         # x = GaussianNoise(1.0)(x)
 
-        # out = Lambda(lambda i: i * 180)(decoded)
 
         model = Model([inp, inp_acid, auxiliary_input, advantage, old_residue_prediction, old_angle_prediction], outputs=[residue_selected, angle_mover])
 
@@ -98,7 +100,7 @@ class Actor:
         return self.model.predict(state)
 
 
-    def train(self, input, out, batch_size=32, shuffle=True, epochs=10, verbose=False,  callbacks=None):
+    def train(self, input, out, batch_size=64, shuffle=True, epochs=10, verbose=False,  callbacks=None):
         """ Actor Training
         """
         return self.model.fit(input, out, batch_size=batch_size, shuffle=shuffle, epochs=epochs, verbose=verbose,  callbacks=callbacks)

@@ -32,15 +32,18 @@ class Critic:
         inp_acid = Input(shape=self.env_amino_acid_dim)
         auxiliary_input = Input(shape=self.env_energy_dim)
 
-        rrn = Bidirectional(LSTM(64, return_sequences=True))(inp)
-        rrn_acid = Bidirectional(LSTM(64, return_sequences=True))(inp_acid)
+        rrn = Bidirectional(LSTM(64, return_sequences=False))(inp)
+        rrn_acid = Bidirectional(LSTM(64, return_sequences=False))(inp_acid)
         hidden = concatenate([rrn, rrn_acid], axis=1)
 
-        rrn = Bidirectional(LSTM(32, return_sequences=False))(hidden)
+        # rrn = Bidirectional(LSTM(32, return_sequences=False))(hidden)
 
         # rnn = Dense(128, activation='relu')(rrn)
         # x = concatenate([rnn, auxiliary_input])
-        x = Dense(32, activation='relu')(rrn)
+        x = Dense(128, activation='relu')(hidden)
+        x = concatenate([x, auxiliary_input])
+        x = Dense(64, activation='relu')(x)
+
         out = Dense(1, activation='linear', kernel_initializer=RandomUniform())(x)
 
         return Model([inp, inp_acid, auxiliary_input], out)
@@ -50,7 +53,7 @@ class Critic:
         """
         return self.model.predict(inp)
 
-    def train(self, input, out, batch_size=32, shuffle=True, epochs=10, verbose=False):
+    def train(self, input, out, batch_size=128, shuffle=True, epochs=10, verbose=False):
         """ Actor Training
         """
         return self.model.fit(input, out, batch_size=batch_size, shuffle=shuffle, epochs=epochs, verbose=verbose)

@@ -18,25 +18,28 @@ from critic import Critic
 ENV = 'gym_rosetta:protein-fold-v0'
 CONTINUOUS = True
 
-EPISODES = 100000
+EPISODES = 10000
 
-LOSS_CLIPPING = 0.2 # Only implemented clipping for the surrogate loss, paper said it was best
+LOSS_CLIPPING = 0.3 # Only implemented clipping for the surrogate loss, paper said it was best
 EPOCHS = 10
-NOISE = 0.5 # Exploration noise
+NOISE = 0.15 # Exploration noise
 
 GAMMA = 0.99
 
-BUFFER_SIZE = 64
-BATCH_SIZE = 32
-NUM_ACTIONS = 128
+BUFFER_SIZE = 512
+BATCH_SIZE = 64
+NUM_ACTIONS = 64
 NUM_STATE = 8
 HIDDEN_SIZE = 128
 NUM_LAYERS = 2
 ENTROPY_LOSS = 5e-3
 LR = 1e-4  # Lower lr stabilises training greatly
 
-DUMMY_RESIDUE_ACTION, DUMMY_ANGLE_ACTION, DUMMY_VALUE = np.zeros((128,)),  np.zeros((3,)), np.zeros((1, 1))
-
+DUMMY_RESIDUE_ACTION, DUMMY_ANGLE_ACTION, DUMMY_VALUE = np.zeros((64,)),  np.zeros((3,)), np.zeros((1, 1))
+from numpy.random import seed
+seed(1)
+from tensorflow import set_random_seed
+set_random_seed(2)
 
 @nb.jit
 def exponential_average(old, new, b1):
@@ -44,7 +47,6 @@ def exponential_average(old, new, b1):
 
 class Agent:
     def __init__(self):
-
 
         self.env = gym.make(ENV)
         print(self.env.action_space, 'action_space', self.env.observation_space, 'observation_space')
@@ -83,8 +85,11 @@ class Agent:
         self.episode += 1
         if self.episode % 20 == 0:
             self.val = True
+            self.env.set_validation_mode(True)
         else:
             self.val = False
+            self.env.set_validation_mode(False)
+
         obs, reward, done, a = self.env.reset()
         self.observation = [obs[key] for key in obs.keys()]
 
@@ -101,6 +106,10 @@ class Agent:
         action_matrix[action] = 1
         return action, action_matrix, p
 
+    def get_value(self):
+        a, b, c = self.observation
+        return self.critic.predict([[a], [b], [c]])
+
     def get_action_continuous(self):
 
         a, b, c = self.observation
@@ -111,7 +120,6 @@ class Agent:
         else:
             angle_action = p[1][0]
             residue_action = np.argmax(p[0][0])
-        print(residue_action)
 
         zeros = np.zeros(NUM_ACTIONS)
         zeros[residue_action] = 1
@@ -123,8 +131,6 @@ class Agent:
             self.writer.add_scalar('Val episode reward', np.array(self.reward).sum(), self.episode)
         else:
             self.writer.add_scalar('Episode reward', np.array(self.reward).sum(), self.episode)
-        for j in range(len(self.reward) - 2, -1, -1):
-            self.reward[j] += self.reward[j + 1] * GAMMA
 
     def transform_output(self, batched_output):
         angle = []
@@ -140,12 +146,14 @@ class Agent:
 
         tmp_batch = [[], []]
         temp_input_batch = [[] for _ in range(3)]
-
+        temp_value = []
         while len(batch[0]) < BUFFER_SIZE:
             action, action_matrix, predicted_action = self.get_action_continuous()
+            values = self.get_value()
+            temp_value.append(values[0][0])
+
             obs_local, reward, done, info = self.env.step(action)
             observation = [obs_local[key] for key in obs_local.keys()]
-            print(reward)
             self.reward.append(reward)
             for i, ob in enumerate(self.observation):
                 temp_input_batch[i].append(ob)
@@ -159,7 +167,11 @@ class Agent:
                 if self.val is False:
                     for i in range(len(tmp_batch[0])):
                         action, pred = tmp_batch[0][i], tmp_batch[1][i]
-                        r = self.reward[i]
+                        if i == len(tmp_batch[0]) - 1:
+                            v = 0
+                        else:
+                            v = self.reward[i] + GAMMA * temp_value[i+1]
+                        r = v
                         batch[0].append(action)
                         batch[1].append(pred)
                         batch[2].append(r)
