@@ -2,18 +2,22 @@ from pdbtools.clean import pdbClean
 from pdbtools.helper import cmdline
 import os
 
-for file in os.listdir('protein_data/short_valid'):
-    f = open(os.path.join('protein_data/short_valid',file), 'r')
-    pdb = f.readlines()
-    f.close()
-
-    # print("Loading %s" % pdb_file)
-    pdb_id = 'file'
-    pdb = pdbClean(pdb, renumber_residues=True)
-
-    g = open(os.path.join('protein_data/short_valid', file), "w")
-    g.writelines(pdb)
-    g.close()
+# for file in os.listdir('protein_data/shortest'):
+#     try:
+#         f = open(os.path.join('protein_data/shortest',file), 'r')
+#         print(file)
+#         pdb = f.readlines()
+#         f.close()
+#
+#         # print("Loading %s" % pdb_file)
+#         pdb_id = 'file'
+#         pdb = pdbClean(pdb, renumber_residues=True)
+#
+#         g = open(os.path.join('protein_data/shortest', file), "w")
+#         g.writelines(pdb)
+#         g.close()
+#     except:
+#         pass
 
 
 import os, subprocess, time, signal
@@ -30,9 +34,9 @@ from pyrosetta.rosetta.core.scoring import CA_rmsd
 from pyrosetta import PyMOLMover
 import numpy as np
 init()
-
-pdb = pose_from_pdb(os.path.join('protein_data/short', '5kk9.pdb'))
-pdb_2 = pose_from_pdb(os.path.join('protein_data/short', '5kk9.pdb'))
+#
+pdb = pose_from_pdb(os.path.join('protein_data/short', '1y32.pdb'))
+pdb_2 = pose_from_pdb(os.path.join('protein_data/short', '1y32.pdb'))
 pdb_seq = pose_from_sequence(pdb_2.sequence())
 pymover = PyMOLMover()
 pymover.keep_history(True)

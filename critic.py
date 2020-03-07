@@ -29,11 +29,12 @@ class Critic:
         """ Assemble Critic network to predict q-values
         """
         inp = Input(shape=self.env_backbone_dim)
-        inp_acid = Input(shape=self.env_amino_acid_dim)
+        inp_acid = Input(shape=(self.env_amino_acid_dim[0],))
         auxiliary_input = Input(shape=self.env_energy_dim)
 
+        embedded = Embedding(self.env_amino_acid_dim[1], 100, input_length=(self.env_amino_acid_dim[0]))(inp_acid)
         rrn = Bidirectional(LSTM(64, return_sequences=False))(inp)
-        rrn_acid = Bidirectional(LSTM(64, return_sequences=False))(inp_acid)
+        rrn_acid = Bidirectional(LSTM(64, return_sequences=False))(embedded)
         hidden = concatenate([rrn, rrn_acid], axis=1)
 
         # rrn = Bidirectional(LSTM(32, return_sequences=False))(hidden)
