@@ -29,12 +29,11 @@ class Critic:
         """ Assemble Critic network to predict q-values
         """
         inp = Input(shape=self.env_backbone_dim)
-        inp_acid = Input(shape=(self.env_amino_acid_dim[0],))
+        inp_acid = Input(shape=(self.env_amino_acid_dim))
         auxiliary_input = Input(shape=self.env_energy_dim)
 
-        embedded = Embedding(self.env_amino_acid_dim[1], 100, input_length=(self.env_amino_acid_dim[0]))(inp_acid)
         rrn = Bidirectional(LSTM(64, return_sequences=False))(inp)
-        rrn_acid = Bidirectional(LSTM(64, return_sequences=False))(embedded)
+        rrn_acid = Bidirectional(LSTM(64, return_sequences=False))(inp_acid)
         hidden = concatenate([rrn, rrn_acid], axis=1)
 
         # rrn = Bidirectional(LSTM(32, return_sequences=False))(hidden)
@@ -54,7 +53,7 @@ class Critic:
         """
         return self.model.predict(inp)
 
-    def train(self, input, out, batch_size=128, shuffle=True, epochs=10, verbose=False):
+    def train(self, input, out, batch_size=128, shuffle=True, epochs=8, verbose=False):
         """ Actor Training
         """
         return self.model.fit(input, out, batch_size=batch_size, shuffle=shuffle, epochs=epochs, verbose=verbose)
