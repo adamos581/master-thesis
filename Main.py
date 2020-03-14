@@ -20,13 +20,13 @@ CONTINUOUS = True
 
 EPISODES = 10000
 
-LOSS_CLIPPING = 0.3 # Only implemented clipping for the surrogate loss, paper said it was best
+LOSS_CLIPPING = 0.2 # Only implemented clipping for the surrogate loss, paper said it was best
 EPOCHS = 8
 NOISE = 0.15 # Exploration noise
 
 GAMMA = 0.99
 
-BUFFER_SIZE = 512
+BUFFER_SIZE = 1024
 BATCH_SIZE = 128
 NUM_ACTIONS = 64
 NUM_STATE = 8
@@ -35,7 +35,7 @@ NUM_LAYERS = 2
 ENTROPY_LOSS = 4e-3
 LR = 1e-4  # Lower lr stabilises training greatly
 
-DUMMY_RESIDUE_ACTION, DUMMY_ANGLE_ACTION, DUMMY_VALUE = np.zeros((64,)),  np.zeros((3,)), np.zeros((1, 1))
+DUMMY_RESIDUE_ACTION, DUMMY_TORSION_ACTION, DUMMY_ANGLE_ACTION, DUMMY_VALUE = np.zeros((64,)),  np.zeros((3,)), np.zeros((1,)), np.zeros((1, 1))
 from numpy.random import seed
 seed(1)
 from tensorflow import set_random_seed
@@ -102,7 +102,7 @@ class Agent:
     def get_action_continuous(self):
 
         a, b, c, residue_mask = self.observation
-        p = self.actor.predict_residue([[a], [b], [c], [residue_mask], DUMMY_VALUE, [DUMMY_RESIDUE_ACTION], [DUMMY_ANGLE_ACTION]])
+        p = self.actor.predict_residue([[a], [b], [c], [residue_mask], DUMMY_VALUE, [DUMMY_RESIDUE_ACTION]])
         if self.val is False:
             residue_action = np.random.choice(NUM_ACTIONS, p=np.nan_to_num(p[0]))
         else:
@@ -110,13 +110,21 @@ class Agent:
         zeros = np.zeros(NUM_ACTIONS)
         zeros[residue_action] = 1
 
-        angle_pred = self.actor.predict_angle([[a], [b], [c], [zeros], DUMMY_VALUE, [DUMMY_RESIDUE_ACTION], [DUMMY_ANGLE_ACTION]])
+        torsion_pred = self.actor.predict_torsion([[a], [b], [c], [zeros], DUMMY_VALUE, [DUMMY_TORSION_ACTION]])
+        if self.val is False:
+            torsion_action = np.random.choice(3, p=np.nan_to_num(torsion_pred[0]))
+        else:
+            torsion_action = np.argmax(torsion_pred[0])
+        torsion_log = np.zeros(3)
+        torsion_log[torsion_action] = 1
+
+        angle_pred = self.actor.predict_angle([[a], [b], [c], [zeros], [torsion_log], DUMMY_VALUE, [DUMMY_ANGLE_ACTION]])
         if self.val is False:
             angle_action = angle_pred[0] + np.random.normal(loc=0, scale=NOISE, size=angle_pred[0].shape)
         else:
             angle_action = angle_pred[0]
-        action_matrix = [zeros, angle_action]
-        return {"residue": residue_action, "angles": angle_action}, action_matrix, [p[0], angle_pred[0]]
+        action_matrix = [zeros, torsion_log, angle_action]
+        return {"residue": residue_action, "torsion": torsion_action, "angles": angle_action}, action_matrix, [p[0], torsion_pred[0], angle_pred[0]]
 
     def transform_reward(self):
         if self.val is True:
@@ -126,11 +134,13 @@ class Agent:
 
     def transform_output(self, batched_output):
         angle = []
+        torsion = []
         residue = []
         for y in batched_output:
-            angle.append(y[1])
+            angle.append(y[2])
+            torsion.append(y[1])
             residue.append(y[0])
-        return residue, angle
+        return residue, torsion, angle
 
     def get_batch(self):
         batch = [[], [], []]
@@ -139,6 +149,7 @@ class Agent:
         tmp_batch = [[], []]
         temp_input_batch = [[] for _ in range(4)]
         temp_value = []
+        temp_reward = []
         while len(batch[0]) < BUFFER_SIZE:
             action, action_matrix, predicted_action = self.get_action_continuous()
             print(action)
@@ -148,6 +159,7 @@ class Agent:
             obs_local, reward, done, info = self.env.step(action)
             observation = [obs_local[key] for key in obs_local.keys()]
             self.reward.append(reward)
+            temp_reward.append(reward)
             for i, ob in enumerate(self.observation):
                 temp_input_batch[i].append(ob)
 
@@ -155,60 +167,72 @@ class Agent:
             tmp_batch[1].append(predicted_action)
             self.observation = observation
 
-            if done:
-                self.transform_reward()
+            if len(tmp_batch[0]) == 32:
                 if self.val is False:
                     for i in range(len(tmp_batch[0])):
                         action, pred = tmp_batch[0][i], tmp_batch[1][i]
-                        if i == len(tmp_batch[0]) - 1:
-                            v = 0
-                        else:
-                            v = self.reward[i] + GAMMA * temp_value[i+1]
-                        r = v
                         batch[0].append(action)
                         batch[1].append(pred)
-                        batch[2].append(r)
+                        # batch[2].append(r)
                     for i in range(len(temp_input_batch)):
                         input_batch[i] = input_batch[i] + temp_input_batch[i]
+                    lastgaelam = 0
+                    mb_advs = np.zeros_like(temp_reward)
+                    for t in reversed(range(len(tmp_batch[0]))):
+                        if t == len(tmp_batch[0]) - 1:
+                            nextnonterminal = 1 - done
+                            nextvalues = values
+                        else:
+                            nextnonterminal = 1
+                            nextvalues = temp_value[t + 1]
+                        delta = temp_reward[t] + GAMMA * nextvalues * nextnonterminal - temp_value[t]
+                        mb_advs[t] = lastgaelam = delta + GAMMA * nextnonterminal * lastgaelam
+                    mb_returns = mb_advs + temp_value
+                    batch[2] = np.concatenate((batch[2], mb_returns))
                 tmp_batch = [[], []]
                 temp_input_batch = [[] for _ in range(4)]
-                self.reset_env()
-        action, pred, reward = np.array(batch[0]), np.array(batch[1]), np.reshape(np.array(batch[2]), (len(batch[2]), 1))
+                temp_value = []
+                temp_reward = []
+                if done:
+                    self.transform_reward()
+                    self.reset_env()
+        action, pred, returns = np.array(batch[0]), np.array(batch[1]), np.reshape(np.array(batch[2]), (len(batch[2]), 1))
 
         obs = input_batch
-        return obs, action, pred, reward
+        return obs, action, pred, returns
 
     def run(self):
         valid_step = 0
         # tbCallBack = keras.callbacks.TensorBoard(log_dir='./Graph', histogram_freq=0, write_graph=True,
         #                                          write_images=True)
         while self.episode < EPISODES:
-            obs, action, pred, reward = self.get_batch()
-            action, pred, reward = action[:BUFFER_SIZE], pred[:BUFFER_SIZE], reward[:BUFFER_SIZE]
+            obs, action, pred, returns = self.get_batch()
+            action, pred, returns = action[:BUFFER_SIZE], pred[:BUFFER_SIZE], returns[:BUFFER_SIZE]
             for i in range(len(obs)):
                 obs[i] = obs[i][:BUFFER_SIZE]
-            old_prediction = pred
-            residue_action, angle_action = self.transform_output(action)
-            pred_residue_action, pred_angle_action = self.transform_output(pred)
 
-            pred_values = self.critic.predict(obs[:3])
+            residue_action, torsion_angle, angle_action = self.transform_output(action)
+            pred_residue_action, pred_torsion_angle, pred_angle_action = self.transform_output(pred)
 
-            advantage = reward - pred_values
+            values = self.critic.predict(obs[:3])
+            advs = returns - values
+            advs = (advs - advs.mean()) / (advs.std() + 1e-8)
 
-            actor_loss_residue = self.actor.train_residue([*obs, advantage, pred_residue_action, pred_angle_action], [residue_action],
+            actor_loss_residue = self.actor.train_residue([*obs, advs, pred_residue_action], [residue_action],
                                           batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
-            # actor_loss_angle = self.actor.train_angle([*obs[:3], residue_action, advantage, pred_residue_action, pred_angle_action],
-            #                                       [angle_action],
-            #                                       batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
-            critic_loss = self.critic.train([*obs[:3]], [reward], batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
+            self.actor.train_torsion([*obs[:3], residue_action, advs, pred_torsion_angle], [torsion_angle],
+                                                          batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS,
+                                                          verbose=True)
+            actor_loss_angle = self.actor.train_angle([*obs[:3], residue_action, torsion_angle, advs, pred_angle_action],
+                                                  [angle_action],
+                                                  batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
+            critic_loss = self.critic.train([*obs[:3]], [returns], batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
             self.writer.add_scalar('Actor residue loss', actor_loss_residue.history['loss'][-1], self.gradient_steps)
-            # self.writer.add_scalar('Actor angle loss', actor_loss_angle.history['loss'][-1], self.gradient_steps)
+            self.writer.add_scalar('Actor angle loss', actor_loss_angle.history['loss'][-1], self.gradient_steps)
 
             self.writer.add_scalar('Critic loss', critic_loss.history['loss'][-1], self.gradient_steps)
-            self.writer.add_scalar('Reward history', np.mean(reward), self.gradient_steps)
             if self.val:
                 valid_step += 1
-                self.writer.add_scalar('validation Reward history', np.mean(reward), valid_step)
                 self.actor.save('')
 
             self.gradient_steps += 1
