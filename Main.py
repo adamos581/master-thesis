@@ -1,17 +1,10 @@
 # Initial framework taken from https://github.com/jaara/AI-blog/blob/master/CartPole-A3C.py
 
 import numpy as np
-
 import gym
-
-from keras.models import Model
-from keras.layers import Input, Dense
-from keras import backend as K
-from keras.optimizers import Adam
-import keras.callbacks
 import numba as nb
 from tensorboardX import SummaryWriter
-
+from sklearn.utils import shuffle
 from actor import Actor
 from critic import Critic
 
@@ -20,13 +13,13 @@ CONTINUOUS = True
 
 EPISODES = 10000
 
-LOSS_CLIPPING = 0.2 # Only implemented clipping for the surrogate loss, paper said it was best
+LOSS_CLIPPING = 0.3 # Only implemented clipping for the surrogate loss, paper said it was best
 EPOCHS = 8
 NOISE = 0.15 # Exploration noise
 
 GAMMA = 0.99
 
-BUFFER_SIZE = 1024
+BUFFER_SIZE = 512
 BATCH_SIZE = 128
 NUM_ACTIONS = 64
 NUM_STATE = 8
@@ -34,8 +27,8 @@ HIDDEN_SIZE = 128
 NUM_LAYERS = 2
 ENTROPY_LOSS = 4e-3
 LR = 1e-4  # Lower lr stabilises training greatly
-
-DUMMY_RESIDUE_ACTION, DUMMY_TORSION_ACTION, DUMMY_ANGLE_ACTION, DUMMY_VALUE = np.zeros((64,)),  np.zeros((3,)), np.zeros((1,)), np.zeros((1, 1))
+LAMBDA = 0.95
+DUMMY_RESIDUE_ACTION, DUMMY_TORSION_ACTION, DUMMY_ANGLE_ACTION, DUMMY_VALUE = np.zeros((64,)),  np.zeros((3,)), np.zeros((2,)), np.zeros((1, 1))
 from numpy.random import seed
 seed(1)
 from tensorflow import set_random_seed
@@ -75,7 +68,7 @@ class Agent:
     def get_name(self):
         name = 'AllRuns/'
         if CONTINUOUS is True:
-            name += 'continous/'
+            name += 'continous-testy/'
         else:
             name += 'discrete/'
         name += ENV
@@ -109,6 +102,7 @@ class Agent:
             residue_action = np.argmax(p[0])
         zeros = np.zeros(NUM_ACTIONS)
         zeros[residue_action] = 1
+        print(np.sum(p[0] * np.log(p[0] + 1e-10)))
 
         torsion_pred = self.actor.predict_torsion([[a], [b], [c], [zeros], DUMMY_VALUE, [DUMMY_TORSION_ACTION]])
         if self.val is False:
@@ -120,9 +114,9 @@ class Agent:
 
         angle_pred = self.actor.predict_angle([[a], [b], [c], [zeros], [torsion_log], DUMMY_VALUE, [DUMMY_ANGLE_ACTION]])
         if self.val is False:
-            angle_action = angle_pred[0] + np.random.normal(loc=0, scale=NOISE, size=angle_pred[0].shape)
+            angle_action = angle_pred[0][0] + np.random.normal(loc=0, scale=angle_pred[0][1], size=angle_pred[0][0].shape)
         else:
-            angle_action = angle_pred[0]
+            angle_action = angle_pred[0][0]
         action_matrix = [zeros, torsion_log, angle_action]
         return {"residue": residue_action, "torsion": torsion_action, "angles": angle_action}, action_matrix, [p[0], torsion_pred[0], angle_pred[0]]
 
@@ -186,7 +180,7 @@ class Agent:
                             nextnonterminal = 1
                             nextvalues = temp_value[t + 1]
                         delta = temp_reward[t] + GAMMA * nextvalues * nextnonterminal - temp_value[t]
-                        mb_advs[t] = lastgaelam = delta + GAMMA * nextnonterminal * lastgaelam
+                        mb_advs[t] = lastgaelam = delta + GAMMA* LAMBDA * lastgaelam
                     mb_returns = mb_advs + temp_value
                     batch[2] = np.concatenate((batch[2], mb_returns))
                 tmp_batch = [[], []]
@@ -211,6 +205,7 @@ class Agent:
             for i in range(len(obs)):
                 obs[i] = obs[i][:BUFFER_SIZE]
 
+            *obs, action, pred, returns = shuffle(*obs, action, pred, returns, random_state=0)
             residue_action, torsion_angle, angle_action = self.transform_output(action)
             pred_residue_action, pred_torsion_angle, pred_angle_action = self.transform_output(pred)
 
@@ -220,7 +215,7 @@ class Agent:
 
             actor_loss_residue = self.actor.train_residue([*obs, advs, pred_residue_action], [residue_action],
                                           batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
-            self.actor.train_torsion([*obs[:3], residue_action, advs, pred_torsion_angle], [torsion_angle],
+            torsion_loss = self.actor.train_torsion([*obs[:3], residue_action, advs, pred_torsion_angle], [torsion_angle],
                                                           batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS,
                                                           verbose=True)
             actor_loss_angle = self.actor.train_angle([*obs[:3], residue_action, torsion_angle, advs, pred_angle_action],
@@ -229,6 +224,7 @@ class Agent:
             critic_loss = self.critic.train([*obs[:3]], [returns], batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
             self.writer.add_scalar('Actor residue loss', actor_loss_residue.history['loss'][-1], self.gradient_steps)
             self.writer.add_scalar('Actor angle loss', actor_loss_angle.history['loss'][-1], self.gradient_steps)
+            self.writer.add_scalar('Actor torsion loss', torsion_loss.history['loss'][-1], self.gradient_steps)
 
             self.writer.add_scalar('Critic loss', critic_loss.history['loss'][-1], self.gradient_steps)
             if self.val:

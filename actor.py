@@ -11,9 +11,8 @@ from keras.layers import LSTM, Bidirectional, multiply, GlobalAveragePooling1D,R
 from keras.optimizers import Adam
 from keras.losses import categorical_crossentropy
 from keras.utils.vis_utils import plot_model
-from keras.backend import print_tensor
-from keras.activations import softmax
-ENTROPY_LOSS = 5e-3
+
+ENTROPY_LOSS = 1e-4
 
 def normc_initializer(std=1.0, axis=0):
     def _initializer(shape, dtype=None, partition_info=None):  # pylint: disable=W0613
@@ -29,32 +28,43 @@ def entropy(logits):
     p0 = ea0 / z0
     return tf.reduce_sum(p0 * (tf.log(z0) - a0), axis=-1)
 
+def prob_continous(y_true, y_pred, noise):
+    var = tf.exp(noise)
+
+    return 0.5 * tf.reduce_sum(tf.square((y_true - y_pred) / var), axis=-1) \
+    + 0.5 * np.log(2.0 * np.pi) * y_true + noise
+
 def proximal_policy_optimization_loss_continuous(advantage, old_prediction, noise, loss_clipping):
     def loss(y_true, y_pred):
-        var = K.square(noise)
+        pred_mean, pred_logstd = tf.split(axis=1, num_or_size_splits=2, value=y_pred)
+        old_mean, old_logstd = tf.split(axis=1, num_or_size_splits=2, value=old_prediction)
+
+        var = K.square(pred_logstd)
+        old_var = K.square(old_logstd)
+
         pi = 3.1415926
         denom = K.sqrt(2 * pi * var)
-        prob_num = K.exp(- K.square(y_true - y_pred) / (2 * var))
+        old_denom = K.sqrt(2 * pi * old_var)
 
-        old_prob_num = K.exp(- K.square(y_true - old_prediction) / (2 * var))
+        prob_num = K.exp(- K.square(y_true - pred_mean) / (2 * var))
+        old_prob_num = K.exp(- K.square(y_true - old_mean) / (2 * old_var))
 
-        prob = prob_num/denom
-        old_prob = old_prob_num/denom
-        r = K.mean(prob/(old_prob + 1e-10))
+        prob = prob_num / denom
+        old_prob = old_prob_num / old_denom
+        r = prob / (old_prob + 1e-10)
+        entropy = (pred_logstd + .5 * np.log(2.0 * np.pi * np.e)) * ENTROPY_LOSS
 
-        return -K.mean(K.minimum(r * advantage, K.clip(r, min_value=1 - loss_clipping, max_value=1 + loss_clipping) * advantage))
+        return -K.mean(K.minimum(r * advantage, K.clip(r, min_value=1 - loss_clipping, max_value=1 + loss_clipping) * advantage) + entropy)
     return loss
 
 def proximal_policy_optimization_loss(advantage, old_prediction, loss_clipping):
     def loss(y_true, y_pred):
-        prob = categorical_crossentropy(y_true, y_pred)
-        # prob = K.sum(y_true * y_pred, axis=-1)
-        old_prob = categorical_crossentropy(y_true, old_prediction)
-        r = K.exp(old_prob - prob)
-        surr = K.minimum(r * advantage, K.clip(r, min_value=1 - loss_clipping, max_value=1 + loss_clipping) * advantage)
-        policy_loss = K.mean(surr)
-        entropy = K.mean(ENTROPY_LOSS * -(prob * K.log(prob + 1e-10)))
-        return -policy_loss + entropy
+        # prob = categorical_crossentropy(y_true, y_pred)
+        prob = K.sum(y_true * y_pred, axis=-1)
+        old_prob = K.sum(y_true * old_prediction, axis=-1)
+        r = prob/(old_prob + 1e-10)
+        entropy = -K.sum(y_pred * K.log(y_pred + 1e-10), axis=-1) * 0
+        return -K.mean(K.minimum(r * advantage, K.clip(r, min_value=1 - loss_clipping, max_value=1 + loss_clipping) * advantage) + ENTROPY_LOSS *entropy)
     return loss
 
 class Actor:
@@ -87,12 +97,12 @@ class Actor:
 
         auxiliary_input = Input(shape=self.env_energy_dim)
         advantage = Input(shape=(1,))
-        old_angle_prediction = Input(shape=(1,))
+        old_angle_prediction = Input(shape=(2,))
         old_torsion_prediction = Input(shape=(3,))
         old_residue_prediction = Input(shape=(self.act_residue_dim,))
 
-        rrn = Bidirectional(LSTM(128, return_sequences=False))(inp)
-        rrn_acid = Bidirectional(LSTM(128, return_sequences=False))(inp_acid)
+        rrn = Bidirectional(LSTM(64, return_sequences=False))(inp)
+        rrn_acid = Bidirectional(LSTM(256, return_sequences=False))(inp_acid)
         hidden = concatenate([rrn, rrn_acid])
         x = Dense(256, activation='relu')(hidden)
         x = concatenate([x, auxiliary_input])
@@ -112,15 +122,22 @@ class Actor:
         residue_selected = Add()([residue_selected, inp_residue_mask])
         residue_selected = Multiply()([residue_selected, inp_residue_mask])
 
-        residue_selected_softmax = Softmax()(residue_selected)
+        def custom_activation(x):
+            x, mask = x
+            x = K.switch(tf.is_nan(x), K.zeros_like(x), x)  # prevent nan values
+            x = K.switch(K.equal(mask, 0), K.zeros_like(x), K.exp(x))
+            return x / K.sum(x, axis=-1, keepdims=True)
+        residue_selected_softmax = Activation(custom_activation)([residue_selected, inp_residue_mask])
+        # residue_selected_softmax = Softmax(input_mask=[3])(residue_selected)
 
         torsion_output = Dense(64, activation='relu')(hidden_torsion_model)
         hidden_angle_model = concatenate([torsion_output, inp_torsion])
 
         hidden_angle_model = Dense(64, activation='relu')(hidden_angle_model)
 
-        angle_mover = Dense(1, activation='tanh', kernel_initializer=normc_initializer(0.01))(hidden_angle_model)
-
+        angle_mover_mean = Dense(1, activation='tanh', kernel_initializer=normc_initializer(0.01))(hidden_angle_model)
+        angle_mover_std = Dense(1, activation='sigmoid', kernel_initializer=normc_initializer(0.1))(hidden_angle_model)
+        angle_mover = concatenate([angle_mover_mean, angle_mover_std])
         model_residue = Model([inp, inp_acid, auxiliary_input, inp_residue_mask, advantage, old_residue_prediction], outputs=[residue_selected_softmax])
 
         model_angle = Model([inp, inp_acid, auxiliary_input, inp_residue, inp_torsion, advantage, old_angle_prediction], outputs=[angle_mover])
@@ -128,11 +145,11 @@ class Actor:
         model_residue.compile(optimizer=Adam(lr=self.lr),
                       loss=proximal_policy_optimization_loss(advantage, old_residue_prediction, self.loss_clipping))
         model_residue.summary()
+        model_angle.summary()
 
         model_angle.compile(optimizer=Adam(lr=self.lr),
                               loss=[proximal_policy_optimization_loss_continuous(
                                         advantage, old_angle_prediction, self.noise, self.loss_clipping)])
-        model_angle.summary()
         plot_model(model_angle, to_file='model_plot.png', show_shapes=True, show_layer_names=True)
         return model_residue, model_torsion, model_angle
 

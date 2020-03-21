@@ -32,8 +32,8 @@ class Critic:
         inp_acid = Input(shape=(self.env_amino_acid_dim))
         auxiliary_input = Input(shape=self.env_energy_dim)
 
-        rrn = Bidirectional(LSTM(128, return_sequences=False))(inp)
-        rrn_acid = Bidirectional(LSTM(128, return_sequences=False))(inp_acid)
+        rrn = Bidirectional(LSTM(64, return_sequences=False))(inp)
+        rrn_acid = Bidirectional(LSTM(256, return_sequences=False))(inp_acid)
         hidden = concatenate([rrn, rrn_acid], axis=1)
 
         # rrn = Bidirectional(LSTM(32, return_sequences=False))(hidden)
@@ -41,7 +41,7 @@ class Critic:
         rnn = Dense(256, activation='relu')(hidden)
         x = concatenate([rnn, auxiliary_input])
         x = Dense(128, activation='relu')(x)
-        x = concatenate([x, auxiliary_input])
+        # x = concatenate([x, auxiliary_input])
         x = Dense(64, activation='relu')(x)
 
         out = Dense(1, activation='linear', kernel_initializer=RandomUniform())(x)

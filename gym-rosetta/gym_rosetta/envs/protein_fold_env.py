@@ -105,8 +105,8 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
             self.move_counter += 1
             residue_number = action["residue"] + 1
             torsion_number = action["torsion"]
+            move_pose = action["angles"]
             if residue_number < self.protein_pose.total_residue():
-                move_pose = action["angles"]
                 if torsion_number == 0:
                     self._move_on_torsion(residue_number, move_pose, self.protein_pose.phi, self.protein_pose.set_phi)
                 if torsion_number == 1:
@@ -152,13 +152,13 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         if self.prev_ca_rmsd:
             reward += self.prev_ca_rmsd - distance
         if self.best_distance > distance:
-            if distance < 4.0:
+            if distance < 3.0:
                 reward += 1
             self.best_distance = distance
             print("best distance: {} ".format(distance))
 
         self.prev_ca_rmsd = distance
-        if self.move_counter >= 128:
+        if self.move_counter >= 150:
             done = True
 
         return [ob, reward, done, {}]
