@@ -63,7 +63,7 @@ def proximal_policy_optimization_loss(advantage, old_prediction, loss_clipping):
         prob = K.sum(y_true * y_pred, axis=-1)
         old_prob = K.sum(y_true * old_prediction, axis=-1)
         r = prob/(old_prob + 1e-10)
-        entropy = -K.sum(y_pred * K.log(y_pred + 1e-10), axis=-1) * 0
+        entropy = -K.sum(y_pred * K.log(y_pred + 1e-10), axis=-1)
         return -K.mean(K.minimum(r * advantage, K.clip(r, min_value=1 - loss_clipping, max_value=1 + loss_clipping) * advantage) + ENTROPY_LOSS *entropy)
     return loss
 
@@ -140,7 +140,7 @@ class Actor:
         angle_mover = concatenate([angle_mover_mean, angle_mover_std])
         model_residue = Model([inp, inp_acid, auxiliary_input, inp_residue_mask, advantage, old_residue_prediction], outputs=[residue_selected_softmax])
 
-        model_angle = Model([inp, inp_acid, auxiliary_input, inp_residue, inp_torsion, advantage, old_angle_prediction], outputs=[angle_mover])
+        model_angle = Model([inp, inp_acid, auxiliary_input, inp_residue_mask, inp_residue, inp_torsion, advantage, old_residue_prediction, old_torsion_prediction, old_angle_prediction], outputs=[angle_mover, torsion_output_softmax, residue_selected_softmax])
 
         model_residue.compile(optimizer=Adam(lr=self.lr),
                       loss=proximal_policy_optimization_loss(advantage, old_residue_prediction, self.loss_clipping))
@@ -149,7 +149,10 @@ class Actor:
 
         model_angle.compile(optimizer=Adam(lr=self.lr),
                               loss=[proximal_policy_optimization_loss_continuous(
-                                        advantage, old_angle_prediction, self.noise, self.loss_clipping)])
+                                        advantage, old_angle_prediction, self.noise, self.loss_clipping),
+                                  proximal_policy_optimization_loss(advantage, old_torsion_prediction,
+                                                                    self.loss_clipping),
+                              proximal_policy_optimization_loss(advantage, old_residue_prediction, self.loss_clipping)])
         plot_model(model_angle, to_file='model_plot.png', show_shapes=True, show_layer_names=True)
         return model_residue, model_torsion, model_angle
 
