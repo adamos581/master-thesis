@@ -15,7 +15,7 @@ import numpy as np
 
 init()
 from pyrosetta.toolbox import cleanATOM
-
+ANGLE_MOVE = [-90, -45, -10, -1, 1, 10, 45, 90]
 import logging
 logger = logging.getLogger(__name__)
 
@@ -60,23 +60,7 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         self.start_distance = 1000
         self.residue_mask = None
         self.shuffle = False
-        # self.viewer = None
-        # self.server_process = None
-        # self.server_port = None
-        # self.hfo_path = hfo_py.get_hfo_path()
-        # self._configure_environment()
-        # self.env = hfo_py.HFOEnvironment()
-        # self.env.connectToServer(config_dir=hfo_py.get_config_path())
-        # self.observation_space = spaces.Box(low=-1, high=1,
-        #                                     shape=(self.env.getStateSize()))
-        # # Action space omits the Tackle/Catch actions, which are useful on defense
-        # self.action_space = spaces.Tuple((spaces.Discrete(3),
-        #                                   spaces.Box(low=0, high=100, shape=1),
-        #                                   spaces.Box(low=-180, high=180, shape=1),
-        #                                   spaces.Box(low=-180, high=180, shape=1),
-        #                                   spaces.Box(low=0, high=100, shape=1),
-        #                                   spaces.Box(low=-180, high=180, shape=1)))
-        # self.status = hfo_py.IN_GAME
+
 
     def save_best_matches(self):
         with open('data.json', 'w') as fp:
@@ -97,7 +81,7 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         return CA_rmsd(coordinates, target)
 
     def _move_on_torsion(self, residue_number, move_pose, get_angle, set_angle):
-        new_torsion_position = get_angle(residue_number) + move_pose * 90
+        new_torsion_position = get_angle(residue_number) + move_pose
         set_angle(residue_number, new_torsion_position)
 
     def _move(self, action):
@@ -105,7 +89,9 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
             self.move_counter += 1
             residue_number = action["residue"] + 1
             torsion_number = action["torsion"]
-            move_pose = action["angles"]
+            move_pose_index = action["angles"]
+            move_pose = ANGLE_MOVE[move_pose_index]
+
             if residue_number < self.protein_pose.total_residue():
                 if torsion_number == 0:
                     self._move_on_torsion(residue_number, move_pose, self.protein_pose.phi, self.protein_pose.set_phi)
@@ -117,7 +103,7 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
                 return 0.0
             else:
                 return -0.5
-
+        return 0.0
     def _encode_residues(self, sequence):
         encoded_residues = []
         for res in sequence:
@@ -132,7 +118,7 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         return encoded_residues
 
     def create_residue_mask(self, sequence):
-        residues_mask = np.ones(len(sequence) - 2 ) * 2
+        residues_mask = np.ones(len(sequence) - 2 ) * 1
         zero = np.zeros(MAX_LENGTH - len(sequence) + 1)
         return np.concatenate(([0], residues_mask, zero),)
 
@@ -152,13 +138,16 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         if self.prev_ca_rmsd:
             reward += self.prev_ca_rmsd - distance
         if self.best_distance > distance:
-            if distance < 3.0:
-                reward += 1
+            # if distance < 3.0:
+            #     reward += 1
             self.best_distance = distance
             print("best distance: {} ".format(distance))
 
         self.prev_ca_rmsd = distance
-        if self.move_counter >= 150:
+        if distance < self.start_distance * 0.4:
+            done = True
+            reward += 5
+        if self.move_counter >= 1024:
             done = True
 
         return [ob, reward, done, {}]

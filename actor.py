@@ -34,7 +34,7 @@ def prob_continous(y_true, y_pred, noise):
     return 0.5 * tf.reduce_sum(tf.square((y_true - y_pred) / var), axis=-1) \
     + 0.5 * np.log(2.0 * np.pi) * y_true + noise
 
-def proximal_policy_optimization_loss_continuous(advantage, old_prediction, noise, loss_clipping):
+def proximal_policy_optimization_loss_continuous(advantage, old_prediction, loss_clipping):
     def loss(y_true, y_pred):
         pred_mean, pred_logstd = tf.split(axis=1, num_or_size_splits=2, value=y_pred)
         old_mean, old_logstd = tf.split(axis=1, num_or_size_splits=2, value=old_prediction)
@@ -49,23 +49,24 @@ def proximal_policy_optimization_loss_continuous(advantage, old_prediction, nois
         prob_num = K.exp(- K.square(y_true - pred_mean) / (2 * var))
         old_prob_num = K.exp(- K.square(y_true - old_mean) / (2 * old_var))
 
-        prob = prob_num / denom
-        old_prob = old_prob_num / old_denom
-        r = prob / (old_prob + 1e-10)
-        entropy = (pred_logstd + .5 * np.log(2.0 * np.pi * np.e)) * ENTROPY_LOSS
+        prob = prob_num/denom
+        old_prob = old_prob_num/old_denom
+        r = (prob / (old_prob + 1e-10))
+        entropy = (pred_logstd + .5 * np.log(2.0 * np.pi * np.e)) * ENTROPY_LOSS * 0
 
-        return -K.mean(K.minimum(r * advantage, K.clip(r, min_value=1 - loss_clipping, max_value=1 + loss_clipping) * advantage) + entropy)
+        return -K.mean(K.minimum(r * advantage, K.clip(r, min_value=1 - loss_clipping, max_value=1 + loss_clipping) * advantage) + entropy) * 0
     return loss
 
 def proximal_policy_optimization_loss(advantage, old_prediction, loss_clipping):
     def loss(y_true, y_pred):
-        # prob = categorical_crossentropy(y_true, y_pred)
         prob = K.sum(y_true * y_pred, axis=-1)
         old_prob = K.sum(y_true * old_prediction, axis=-1)
         r = prob/(old_prob + 1e-10)
+        # r = K.exp(prob - old_prob)
         entropy = -K.sum(y_pred * K.log(y_pred + 1e-10), axis=-1)
         return -K.mean(K.minimum(r * advantage, K.clip(r, min_value=1 - loss_clipping, max_value=1 + loss_clipping) * advantage) + ENTROPY_LOSS *entropy)
     return loss
+
 
 class Actor:
     """ Actor Network for the DDPG Algorithm
@@ -97,13 +98,15 @@ class Actor:
 
         auxiliary_input = Input(shape=self.env_energy_dim)
         advantage = Input(shape=(1,))
-        old_angle_prediction = Input(shape=(2,))
+        old_angle_prediction = Input(shape=(8,))
         old_torsion_prediction = Input(shape=(3,))
         old_residue_prediction = Input(shape=(self.act_residue_dim,))
 
-        rrn = Bidirectional(LSTM(64, return_sequences=False))(inp)
-        rrn_acid = Bidirectional(LSTM(256, return_sequences=False))(inp_acid)
-        hidden = concatenate([rrn, rrn_acid])
+        rnn = Bidirectional(LSTM(256, return_sequences=False))(inp)
+        # hidden = LSTM(256, return_sequences=False)(hidden)
+
+        rrn_acid = Bidirectional(LSTM(64, return_sequences=False))(inp_acid)
+        hidden = concatenate([rnn, rrn_acid])
         x = Dense(256, activation='relu')(hidden)
         x = concatenate([x, auxiliary_input])
         x = Dense(128, activation='relu')(x)
@@ -118,26 +121,25 @@ class Actor:
                               loss=[proximal_policy_optimization_loss(advantage, old_torsion_prediction,
                                                                       self.loss_clipping)])
 
-        residue_selected = Dense(self.act_residue_dim, activation='relu', kernel_initializer=normc_initializer(0.1))(x)
-        residue_selected = Add()([residue_selected, inp_residue_mask])
-        residue_selected = Multiply()([residue_selected, inp_residue_mask])
+        residue_selected_softmax = Dense(self.act_residue_dim, activation='softmax', kernel_initializer=normc_initializer(0.01))(x)
+        # residue_selected = Add()([residue_selected, inp_residue_mask])
+        # residue_selected = Multiply()([residue_selected, inp_residue_mask])
 
-        def custom_activation(x):
-            x, mask = x
-            x = K.switch(tf.is_nan(x), K.zeros_like(x), x)  # prevent nan values
-            x = K.switch(K.equal(mask, 0), K.zeros_like(x), K.exp(x))
-            return x / K.sum(x, axis=-1, keepdims=True)
-        residue_selected_softmax = Activation(custom_activation)([residue_selected, inp_residue_mask])
-        # residue_selected_softmax = Softmax(input_mask=[3])(residue_selected)
+        # def custom_activation(x):
+        #     x, mask = x
+        #     x = K.switch(tf.is_nan(x), K.zeros_like(x), x)  # prevent nan values
+        #     x = K.switch(K.equal(mask, 0), K.zeros_like(x), K.exp(x))
+        #     return x / K.sum(x, axis=-1, keepdims=True)
+        # residue_selected_softmax = Activation(custom_activation)([residue_selected, inp_residue_mask])
+        # residue_selected_softmax = Softmax()(residue_selected)
 
         torsion_output = Dense(64, activation='relu')(hidden_torsion_model)
         hidden_angle_model = concatenate([torsion_output, inp_torsion])
 
         hidden_angle_model = Dense(64, activation='relu')(hidden_angle_model)
 
-        angle_mover_mean = Dense(1, activation='tanh', kernel_initializer=normc_initializer(0.01))(hidden_angle_model)
-        angle_mover_std = Dense(1, activation='sigmoid', kernel_initializer=normc_initializer(0.1))(hidden_angle_model)
-        angle_mover = concatenate([angle_mover_mean, angle_mover_std])
+        angle_mover = Dense(8, activation='softmax', kernel_initializer=normc_initializer(0.01))(hidden_angle_model)
+
         model_residue = Model([inp, inp_acid, auxiliary_input, inp_residue_mask, advantage, old_residue_prediction], outputs=[residue_selected_softmax])
 
         model_angle = Model([inp, inp_acid, auxiliary_input, inp_residue_mask, inp_residue, inp_torsion, advantage, old_residue_prediction, old_torsion_prediction, old_angle_prediction], outputs=[angle_mover, torsion_output_softmax, residue_selected_softmax])
@@ -148,8 +150,8 @@ class Actor:
         model_angle.summary()
 
         model_angle.compile(optimizer=Adam(lr=self.lr),
-                              loss=[proximal_policy_optimization_loss_continuous(
-                                        advantage, old_angle_prediction, self.noise, self.loss_clipping),
+                              loss=[proximal_policy_optimization_loss(
+                                        advantage, old_angle_prediction, self.loss_clipping),
                                   proximal_policy_optimization_loss(advantage, old_torsion_prediction,
                                                                     self.loss_clipping),
                               proximal_policy_optimization_loss(advantage, old_residue_prediction, self.loss_clipping)])
