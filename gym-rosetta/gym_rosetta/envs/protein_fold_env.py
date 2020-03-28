@@ -60,6 +60,7 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         self.start_distance = 1000
         self.residue_mask = None
         self.shuffle = False
+        self.achieved_goal_counter = 0
 
 
     def save_best_matches(self):
@@ -144,9 +145,12 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
             print("best distance: {} ".format(distance))
 
         self.prev_ca_rmsd = distance
-        if distance < self.start_distance * 0.4:
-            done = True
+        if distance < self.start_distance * 0.1:
+            self.achieved_goal_counter += 1
             reward += 5
+            if self.achieved_goal_counter > 25:
+                done = True
+
         if self.move_counter >= 1024:
             done = True
 
@@ -171,6 +175,7 @@ class ProteinFoldEnv(gym.Env, utils.EzPickle):
         self.move_counter = 0
         self.reward = 0.0
         self.prev_ca_rmsd = None
+        self.achieved_goal_counter = 0
 
         self.best_distance = self._get_ca_metric(self.protein_pose, self.target_protein_pose)
         self.start_distance = self._get_ca_metric(self.protein_pose, self.target_protein_pose)
