@@ -227,17 +227,17 @@ class Agent:
             advs = returns - values
             advs = (advs - advs.mean()) / (advs.std() + 1e-8)
 
-            actor_loss_residue = self.actor.train_residue([*obs, advs, pred_residue_action], [residue_action],
-                                          batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
+            # actor_loss_residue = self.actor.train_residue([*obs, advs, pred_residue_action], [residue_action],
+            #                               batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
             # torsion_loss = self.actor.train_torsion([*obs[:3], residue_action, advs, pred_torsion_angle], [torsion_angle],
             #                                               batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS,
             #                                               verbose=True)
-            # actor_loss_angle = self.actor.train_angle([*obs, residue_action, torsion_angle, advs, pred_residue_action, pred_torsion_angle, pred_angle_action],
-            #                                       [angle_action, torsion_angle, residue_action],
-            #                                       batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
+            actor_loss_angle = self.actor.train_angle([*obs, residue_action, torsion_angle, advs, pred_residue_action, pred_torsion_angle, pred_angle_action],
+                                                  [angle_action, torsion_angle, residue_action],
+                                                  batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
             critic_loss = self.critic.train([*obs[:3]], [returns], batch_size=BATCH_SIZE, shuffle=True, epochs=EPOCHS, verbose=True)
             # self.writer.add_scalar('Actor residue loss', actor_loss_residue.history['loss'][-1], self.gradient_steps)
-            # self.writer.add_scalar('Actor angle loss', actor_loss_angle.history['loss'][-1], self.gradient_steps)
+            self.writer.add_scalar('Actor angle loss', actor_loss_angle.history['loss'][-1], self.gradient_steps)
             # self.writer.add_scalar('Actor torsion loss', torsion_loss.history['loss'][-1], self.gradient_steps)
 
             self.writer.add_scalar('Critic loss', critic_loss.history['loss'][-1], self.gradient_steps)
